@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v51)</title>
+<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v52)</title>
 <style>
   :root {
     --bg: #f1f5f9;
@@ -1658,6 +1658,7 @@ let knownPendingIds = new Set();
 let firstLoadDone = false;
 let isWritingCloud = false;
 let lastWriteTs = 0;
+let liveEventSource = null;
 
 function fmtNum(val, maxDec = 2) {
   const n = parseFloat(val);
@@ -2068,11 +2069,88 @@ function getLatestClosingForVehicle(vehicleId) {
   return latestClosing !== null ? { value: latestClosing, time: latestTime, source: latestSource } : null;
 }
 
+// =========================================================================
+// ATOMIC REALTIME CLOUD WRITE & INSTANT SSE LIVE STREAM (NO OVERWRITE)
+// =========================================================================
+function normalizeNodeArray(v) {
+  if (!v) return [];
+  const arr = Array.isArray(v) ? v : (typeof v === "object" ? Object.values(v) : []);
+  return arr.filter(item => item && item !== "__EMPTY__");
+}
+
+function mergeById(cloudArr, localArr) {
+  const map = new Map();
+  cloudArr.forEach(item => {
+    if (item && item.id) map.set(item.id, item);
+  });
+  localArr.forEach(item => {
+    if (item && item.id && !map.has(item.id)) {
+      map.set(item.id, item);
+    }
+  });
+  return Array.from(map.values());
+}
+
+async function pushRecordAtomic(node, record) {
+  isWritingCloud = true;
+  lastWriteTs = Date.now();
+  try {
+    // Save directly under unique record ID so multiple operators never overwrite each other
+    const res = await fetch(`${DB_URL}/gsi_live/${node}/${encodeURIComponent(record.id)}.json`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(record)
+    });
+    if (!res.ok) throw new Error("Write failed");
+    setSyncBadge(true);
+  } catch (e) {
+    setSyncBadge(false);
+    // Fallback full node sync if single key fails
+    await syncNodeToCloud(node, state[node]);
+  } finally {
+    lastWriteTs = Date.now();
+    isWritingCloud = false;
+  }
+}
+
+async function deleteRecordAtomic(node, id) {
+  isWritingCloud = true;
+  lastWriteTs = Date.now();
+  try {
+    await fetch(`${DB_URL}/gsi_live/${node}/${encodeURIComponent(id)}.json`, {
+      method: "DELETE"
+    });
+    // Also clean legacy numeric-index array copy if present in cloud
+    await syncNodeToCloud(node, state[node]);
+    setSyncBadge(true);
+  } catch (e) {
+    setSyncBadge(false);
+  } finally {
+    lastWriteTs = Date.now();
+    isWritingCloud = false;
+  }
+}
+
 async function syncNodeToCloud(node, data) {
   isWritingCloud = true;
   lastWriteTs = Date.now();
   try {
-    const payload = (Array.isArray(data) && data.length === 0) ? ["__EMPTY__"] : data;
+    let payload;
+    if (Array.isArray(data)) {
+      if (data.length === 0) {
+        payload = ["__EMPTY__"];
+      } else if (data[0] && data[0].id) {
+        // Store as ID-keyed map so concurrent operator writes merge cleanly in Firebase
+        payload = {};
+        data.forEach(item => {
+          if (item && item.id) payload[item.id] = item;
+        });
+      } else {
+        payload = data;
+      }
+    } else {
+      payload = data;
+    }
     await fetch(`${DB_URL}/gsi_live/${node}.json`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -2107,10 +2185,10 @@ function setSyncBadge(online) {
   const el = document.getElementById("syncStatus");
   if (online) {
     el.className = "sync-badge live";
-    el.textContent = "🟢 Live";
+    el.textContent = "🟢 Live Realtime";
   } else {
     el.className = "sync-badge";
-    el.textContent = "🟡 Offline";
+    el.textContent = "🟡 Reconnecting...";
   }
 }
 
@@ -2131,14 +2209,109 @@ function playAlertBeep() {
   } catch (e) {}
 }
 
-async function fetchCloudState() {
-  if (isWritingCloud || (Date.now() - lastWriteTs < 2500)) return;
+function applyCloudSnapshot(cloud) {
+  if (!cloud) return;
+
+  const prevDieselCount = state.diesel.length;
+  const prevProgCount = state.progress.length;
+  const prevInwardCount = state.inward.length;
+  const prevElecCount = state.electricity.length;
+
+  const cFleet = normalizeNodeArray(cloud.fleet);
+  const cDiesel = normalizeNodeArray(cloud.diesel);
+  const cInward = normalizeNodeArray(cloud.inward);
+  const cProgress = normalizeNodeArray(cloud.progress);
+  const cOpenShifts = normalizeNodeArray(cloud.openShifts);
+  const cElectricity = normalizeNodeArray(cloud.electricity);
+  const cOperators = normalizeNodeArray(cloud.operators);
+  const cRequests = normalizeNodeArray(cloud.requests);
+
+  // If a write just happened < 3s ago, preserve any optimistic local item not yet echoed
+  const recentlyWrote = (Date.now() - lastWriteTs) < 3000;
+  state.fleet = recentlyWrote ? mergeById(cFleet, state.fleet) : cFleet;
+  state.diesel = recentlyWrote ? mergeById(cDiesel, state.diesel) : cDiesel;
+  state.inward = recentlyWrote ? mergeById(cInward, state.inward) : cInward;
+  state.progress = recentlyWrote ? mergeById(cProgress, state.progress) : cProgress;
+  state.openShifts = recentlyWrote ? mergeById(cOpenShifts, state.openShifts) : cOpenShifts;
+  state.electricity = recentlyWrote ? mergeById(cElectricity, state.electricity) : cElectricity;
+  state.operators = recentlyWrote ? mergeById(cOperators, state.operators) : cOperators;
+  state.requests = recentlyWrote ? mergeById(cRequests, state.requests) : cRequests;
+
+  if (cloud.tankers) state.tankers = normalizeTankers(cloud.tankers);
+  if (cloud.adminPin) state.adminPin = String(cloud.adminPin);
+  if (cloud.mprRemarks && typeof cloud.mprRemarks === "object") {
+    state.mprRemarks = recentlyWrote ? { ...cloud.mprRemarks, ...state.mprRemarks } : cloud.mprRemarks;
+  }
+
+  const pending = state.requests.filter(r => r.status === "Pending");
+  if (firstLoadDone && currentRole === "admin") {
+    let hasNewReq = false;
+    pending.forEach(r => {
+      if (!knownPendingIds.has(r.id)) hasNewReq = true;
+    });
+    if (hasNewReq) {
+      playAlertBeep();
+      showToast("🚨 New Diesel Requirement Alert Received!");
+    } else if (!recentlyWrote && (
+      state.diesel.length > prevDieselCount ||
+      state.progress.length > prevProgCount ||
+      state.inward.length > prevInwardCount ||
+      state.electricity.length > prevElecCount
+    )) {
+      showToast("⚡ Live Update: New Operator Entry Received!");
+    }
+  }
+  knownPendingIds = new Set(pending.map(r => r.id));
+  firstLoadDone = true;
+
+  saveAllLocal();
+  updateGateHeroStats();
+  refreshActiveUI();
+}
+
+function startRealtimeCloudStream() {
+  try {
+    if (liveEventSource) {
+      liveEventSource.close();
+      liveEventSource = null;
+    }
+    // Firebase REST Server-Sent Events (SSE) for instant sub-second push updates
+    liveEventSource = new EventSource(`${DB_URL}/gsi_live.json`);
+
+    liveEventSource.addEventListener("put", (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        setSyncBadge(true);
+        if (msg.path === "/") {
+          applyCloudSnapshot(msg.data);
+        } else {
+          // Incremental path update -> fetch latest merged state immediately
+          fetchCloudState(true);
+        }
+      } catch (err) {}
+    });
+
+    liveEventSource.addEventListener("patch", () => {
+      setSyncBadge(true);
+      fetchCloudState(true);
+    });
+
+    liveEventSource.onerror = () => {
+      setSyncBadge(false);
+    };
+  } catch (e) {
+    // Fallback to fast polling if EventSource is blocked
+  }
+}
+
+async function fetchCloudState(force = false) {
+  if (!force && (isWritingCloud || (Date.now() - lastWriteTs < 2000))) return;
   try {
     const reqStart = Date.now();
-    const res = await fetch(`${DB_URL}/gsi_live.json?t=${reqStart}`);
+    const res = await fetch(`${DB_URL}/gsi_live.json?t=${reqStart}`, { cache: "no-store" });
     if (!res.ok) throw new Error("Network");
     const cloud = await res.json();
-    if (isWritingCloud || lastWriteTs > reqStart) return;
+    if (!force && (isWritingCloud || lastWriteTs > reqStart)) return;
     setSyncBadge(true);
 
     if (!cloud) {
@@ -2150,41 +2323,7 @@ async function fetchCloudState() {
       return;
     }
 
-    const normalizeArr = (v) => {
-      if (!v) return [];
-      const arr = Array.isArray(v) ? v : (typeof v === "object" ? Object.values(v) : []);
-      return arr.filter(item => item && item !== "__EMPTY__");
-    };
-
-    state.fleet = normalizeArr(cloud.fleet);
-    state.diesel = normalizeArr(cloud.diesel);
-    state.inward = normalizeArr(cloud.inward);
-    state.progress = normalizeArr(cloud.progress);
-    state.openShifts = normalizeArr(cloud.openShifts);
-    state.electricity = normalizeArr(cloud.electricity);
-    if (cloud.tankers) state.tankers = normalizeTankers(cloud.tankers);
-    state.operators = normalizeArr(cloud.operators);
-    state.requests = normalizeArr(cloud.requests);
-    if (cloud.adminPin) state.adminPin = String(cloud.adminPin);
-    if (cloud.mprRemarks && typeof cloud.mprRemarks === "object") state.mprRemarks = cloud.mprRemarks;
-
-    const pending = state.requests.filter(r => r.status === "Pending");
-    if (firstLoadDone && currentRole === "admin") {
-      let hasNew = false;
-      pending.forEach(r => {
-        if (!knownPendingIds.has(r.id)) hasNew = true;
-      });
-      if (hasNew) {
-        playAlertBeep();
-        showToast("🚨 New Diesel Requirement Alert Received!");
-      }
-    }
-    knownPendingIds = new Set(pending.map(r => r.id));
-    firstLoadDone = true;
-
-    saveAllLocal();
-    updateGateHeroStats();
-    refreshActiveUI();
+    applyCloudSnapshot(cloud);
   } catch (e) {
     setSyncBadge(false);
     updateGateHeroStats();
@@ -2811,7 +2950,7 @@ async function submitElectricity(e, prefix) {
 
   state.electricity.unshift(entry);
   saveAllLocal();
-  await syncNodeToCloud("electricity", state.electricity);
+  await pushRecordAtomic("electricity", entry);
 
   document.getElementById(prefix + "ElClose").value = "";
   document.getElementById(prefix + "ElOpen").value = closeR;
@@ -3571,7 +3710,7 @@ async function submitDieselIssue(e) {
   };
   state.diesel.unshift(entry);
   saveAllLocal();
-  await syncNodeToCloud("diesel", state.diesel);
+  await pushRecordAtomic("diesel", entry);
   document.getElementById("diLiters").value = "";
   document.getElementById("diRemarks").value = "";
   document.getElementById("diPhoto").value = "";
@@ -3593,7 +3732,7 @@ async function submitTankerInward(e) {
   };
   state.inward.unshift(entry);
   saveAllLocal();
-  await syncNodeToCloud("inward", state.inward);
+  await pushRecordAtomic("inward", entry);
   document.getElementById("tiLiters").value = "";
   document.getElementById("tiBill").value = "";
   document.getElementById("tiPhoto").value = "";
@@ -3631,7 +3770,7 @@ async function submitProgressStep(e) {
 
     state.openShifts.unshift(openObj);
     saveAllLocal();
-    await syncNodeToCloud("openShifts", state.openShifts);
+    await pushRecordAtomic("openShifts", openObj);
 
     document.getElementById("prStart").value = "";
     document.getElementById("prPhoto").value = "";
@@ -3669,8 +3808,8 @@ async function submitProgressStep(e) {
     state.progress.unshift(completedEntry);
     state.openShifts = state.openShifts.filter(s => s.id !== openSession.id);
     saveAllLocal();
-    await syncNodeToCloud("progress", state.progress);
-    await syncNodeToCloud("openShifts", state.openShifts);
+    await pushRecordAtomic("progress", completedEntry);
+    await deleteRecordAtomic("openShifts", openSession.id);
 
     document.getElementById("prEnd").value = "";
     document.getElementById("prRemark").value = "";
@@ -3701,7 +3840,7 @@ async function submitDieselReq(e) {
   };
   state.requests.unshift(req);
   saveAllLocal();
-  await syncNodeToCloud("requests", state.requests);
+  await pushRecordAtomic("requests", req);
   document.getElementById("rqLiters").value = "";
   document.getElementById("rqMeter").value = "";
   document.getElementById("rqNote").value = "";
@@ -4129,7 +4268,7 @@ async function deleteEntry(type, id) {
   if (adminScreen === "GRAPHS") renderGraphicalAnalytics();
   if (adminScreen === "DPR") renderSyncDpr();
   updateGateHeroStats();
-  await syncNodeToCloud(type, state[type]);
+  await deleteRecordAtomic(type, id);
   showToast("🗑️ Entry Deleted Permanently");
 }
 
@@ -4362,13 +4501,17 @@ function copyWhatsAppDPR() {
 }
 
 window.addEventListener("hashchange", checkHashRoute);
+window.addEventListener("visibilitychange", () => {
+  if (!document.hidden) fetchCloudState(true);
+});
 window.addEventListener("DOMContentLoaded", () => {
   loadLocalState();
   initDashSameDateDefault();
   updateGateHeroStats();
   checkHashRoute();
-  fetchCloudState();
-  setInterval(fetchCloudState, 8000);
+  fetchCloudState(true);
+  startRealtimeCloudStream();
+  setInterval(() => fetchCloudState(false), 3000);
 });
 </script>
 </body>
