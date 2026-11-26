@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v52)</title>
+<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v57)</title>
 <style>
   :root {
     --bg: #f1f5f9;
@@ -120,27 +120,6 @@
 
   .tanker-strip { display: flex; justify-content: space-between; align-items: center; background: #f8fafc; border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; margin-bottom: 6px; font-size: 12px; }
   .tanker-strip.low { background: #fef2f2; border-color: #fca5a5; }
-
-  /* OPEN SHIFT BANNER IN OPERATOR MPR */
-  .open-shift-box {
-    background: #fef3c7;
-    border: 1.5px solid #f59e0b;
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 12px;
-  }
-  .open-shift-item {
-    background: #fff;
-    border: 1px solid #fcd34d;
-    border-radius: 8px;
-    padding: 8px 10px;
-    margin-top: 6px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
 
   /* LARGE REMARK TEXTAREA + AUTO OPERATOR TAG */
   .remark-cell { min-width: 185px; white-space: normal; vertical-align: top; }
@@ -618,12 +597,6 @@
         <span id="prUnitBadge" class="badge badge-blue">Auto Unit</span>
       </div>
 
-      <!-- ACTIVE / OPEN ENTRIES LIST -->
-      <div id="openShiftsContainer" class="open-shift-box hidden">
-        <div style="font-size:11.5px;font-weight:800;color:#92400e;">🟡 चालू गाड़ियाँ (Opening Saved — Closing बाकी है):</div>
-        <div id="openShiftsList"></div>
-      </div>
-
       <div id="prAllottedCard" class="hidden" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 12px;margin-bottom:12px;">
         <div style="font-size:10px;font-weight:800;color:#1d4ed8;text-transform:uppercase;">Allotted Machine / Vehicle</div>
         <div id="prAllottedTitle" style="font-size:15px;font-weight:800;color:#1e3a8a;margin-top:2px;"></div>
@@ -940,7 +913,7 @@
         </div>
       </div>
 
-      <!-- 3. MACHINE PROGRESS REPORT (MPR) -->
+      <!-- 3. MACHINE PROGRESS REPORT (MPR) — EXACT ORIGINAL FORMAT -->
       <div class="sec-banner green">
         <h2>🚜 Machine Progress Report (MPR)</h2>
         <span class="badge badge-green" id="mprDateBadge">Today</span>
@@ -2095,7 +2068,6 @@ async function pushRecordAtomic(node, record) {
   isWritingCloud = true;
   lastWriteTs = Date.now();
   try {
-    // Save directly under unique record ID so multiple operators never overwrite each other
     const res = await fetch(`${DB_URL}/gsi_live/${node}/${encodeURIComponent(record.id)}.json`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -2103,10 +2075,11 @@ async function pushRecordAtomic(node, record) {
     });
     if (!res.ok) throw new Error("Write failed");
     setSyncBadge(true);
+    return true;
   } catch (e) {
     setSyncBadge(false);
-    // Fallback full node sync if single key fails
     await syncNodeToCloud(node, state[node]);
+    return false;
   } finally {
     lastWriteTs = Date.now();
     isWritingCloud = false;
@@ -2120,7 +2093,6 @@ async function deleteRecordAtomic(node, id) {
     await fetch(`${DB_URL}/gsi_live/${node}/${encodeURIComponent(id)}.json`, {
       method: "DELETE"
     });
-    // Also clean legacy numeric-index array copy if present in cloud
     await syncNodeToCloud(node, state[node]);
     setSyncBadge(true);
   } catch (e) {
@@ -2140,7 +2112,6 @@ async function syncNodeToCloud(node, data) {
       if (data.length === 0) {
         payload = ["__EMPTY__"];
       } else if (data[0] && data[0].id) {
-        // Store as ID-keyed map so concurrent operator writes merge cleanly in Firebase
         payload = {};
         data.forEach(item => {
           if (item && item.id) payload[item.id] = item;
@@ -2214,6 +2185,7 @@ function applyCloudSnapshot(cloud) {
 
   const prevDieselCount = state.diesel.length;
   const prevProgCount = state.progress.length;
+  const prevOpenCount = state.openShifts.length;
   const prevInwardCount = state.inward.length;
   const prevElecCount = state.electricity.length;
 
@@ -2226,7 +2198,6 @@ function applyCloudSnapshot(cloud) {
   const cOperators = normalizeNodeArray(cloud.operators);
   const cRequests = normalizeNodeArray(cloud.requests);
 
-  // If a write just happened < 3s ago, preserve any optimistic local item not yet echoed
   const recentlyWrote = (Date.now() - lastWriteTs) < 3000;
   state.fleet = recentlyWrote ? mergeById(cFleet, state.fleet) : cFleet;
   state.diesel = recentlyWrote ? mergeById(cDiesel, state.diesel) : cDiesel;
@@ -2255,6 +2226,7 @@ function applyCloudSnapshot(cloud) {
     } else if (!recentlyWrote && (
       state.diesel.length > prevDieselCount ||
       state.progress.length > prevProgCount ||
+      state.openShifts.length > prevOpenCount ||
       state.inward.length > prevInwardCount ||
       state.electricity.length > prevElecCount
     )) {
@@ -2275,7 +2247,6 @@ function startRealtimeCloudStream() {
       liveEventSource.close();
       liveEventSource = null;
     }
-    // Firebase REST Server-Sent Events (SSE) for instant sub-second push updates
     liveEventSource = new EventSource(`${DB_URL}/gsi_live.json`);
 
     liveEventSource.addEventListener("put", (ev) => {
@@ -2285,7 +2256,6 @@ function startRealtimeCloudStream() {
         if (msg.path === "/") {
           applyCloudSnapshot(msg.data);
         } else {
-          // Incremental path update -> fetch latest merged state immediately
           fetchCloudState(true);
         }
       } catch (err) {}
@@ -2299,9 +2269,7 @@ function startRealtimeCloudStream() {
     liveEventSource.onerror = () => {
       setSyncBadge(false);
     };
-  } catch (e) {
-    // Fallback to fast polling if EventSource is blocked
-  }
+  } catch (e) {}
 }
 
 async function fetchCloudState(force = false) {
@@ -2496,7 +2464,18 @@ function saveMprRemark(key, field, value, authorName = "") {
 }
 
 let _mprRowRemTimer = null;
-function saveMprEntryRemark(entryId, value) {
+function saveMprEntryRemark(entryId, value, isOpenShift = false) {
+  if (isOpenShift) {
+    const idx = state.openShifts.findIndex(p => p.id === entryId);
+    if (idx === -1) return;
+    state.openShifts[idx].remark = value;
+    saveAllLocal();
+    clearTimeout(_mprRowRemTimer);
+    _mprRowRemTimer = setTimeout(() => {
+      syncNodeToCloud("openShifts", state.openShifts);
+    }, 600);
+    return;
+  }
   const idx = state.progress.findIndex(p => p.id === entryId);
   if (idx === -1) return;
   state.progress[idx].remark = value;
@@ -2542,7 +2521,7 @@ async function saveEditedMpr(e) {
   };
 
   saveAllLocal();
-  await syncNodeToCloud("progress", state.progress);
+  await pushRecordAtomic("progress", state.progress[idx]);
   closeModal("editMprModal");
   renderAdmin();
   if (adminScreen === "DPR") renderSyncDpr();
@@ -2595,7 +2574,7 @@ async function saveEditedDiesel(e) {
   };
 
   saveAllLocal();
-  await syncNodeToCloud("diesel", state.diesel);
+  await pushRecordAtomic("diesel", state.diesel[idx]);
   closeModal("editDieselModal");
   renderAdmin();
   if (adminScreen === "DPR") renderSyncDpr();
@@ -2603,31 +2582,47 @@ async function saveEditedDiesel(e) {
   showToast("✅ Diesel Entry Updated!");
 }
 
+// =========================================================================
+// UNIFIED MPR ROW RENDERER (SHOWS OPENING DIRECTLY IN TABLE, THEN CLOSING)
+// =========================================================================
 function renderMprRowHtml(x, isDpr) {
-  const timeStr = (x.openTime && x.closeTime)
-    ? `${x.openTime} → ${x.closeTime}<br><span style="font-size:10px;color:var(--muted);">${formatDurationStr(x.timeHrs)}</span>`
-    : (x.closeTime ? `Recorded: ${x.closeTime}` : "-");
+  const isRunning = !!x._isOpenShift;
+  const timeStr = isRunning
+    ? `${x.openTime || "-"} → <span style="color:var(--amber);font-weight:700;">Running</span>`
+    : ((x.openTime && x.closeTime)
+        ? `${x.openTime} → ${x.closeTime}<br><span style="font-size:10px;color:var(--muted);">${formatDurationStr(x.timeHrs)}</span>`
+        : (x.closeTime ? `Recorded: ${x.closeTime}` : "-"));
+
+  const openCloseCell = isRunning
+    ? `<strong>${fmtNum(x.start)}</strong> → <span style="color:var(--amber);font-weight:700;">Closing Pending</span>`
+    : `${fmtNum(x.start)} → ${fmtNum(x.end)}`;
+
+  const netRunCell = isRunning
+    ? `<span class="badge badge-amber">Open (${x.unit})</span>`
+    : `<span class="badge ${x.unit === 'KM' ? 'badge-green' : 'badge-blue'}">${fmtNum(x.net)} ${x.unit}</span>`;
+
   const safeRem = String(x.remark || "").replace(/"/g, "&quot;");
   const photoCell = x.photo
     ? `<button class="btn btn-sm btn-outline" onclick="viewPhoto('${x.photo}')">📷</button>`
     : "-";
-  const actionCell = `
-    <div style="display:flex;gap:4px;">
-      <button class="btn btn-sm btn-outline" title="Edit MPR" onclick="openEditMprModal('${x.id}')">✏️</button>
-      <button class="btn btn-sm btn-outline" title="Delete MPR" onclick="deleteEntry('progress','${x.id}')">🗑️</button>
-    </div>
-  `;
+
+  const actionCell = isRunning
+    ? `<button class="btn btn-sm btn-outline" title="Delete Open Shift" onclick="deleteEntry('openShifts','${x.id}')">🗑️</button>`
+    : `<div style="display:flex;gap:4px;">
+        <button class="btn btn-sm btn-outline" title="Edit MPR" onclick="openEditMprModal('${x.id}')">✏️</button>
+        <button class="btn btn-sm btn-outline" title="Delete MPR" onclick="deleteEntry('progress','${x.id}')">🗑️</button>
+      </div>`;
 
   return `
     <tr>
       <td><strong>${x.date || "-"}</strong></td>
       <td><strong>${x.vehicleNum}</strong><br><span style="font-size:10px;color:var(--muted);">${x.category} (${x.unit})</span></td>
       <td>${timeStr}</td>
-      <td>${fmtNum(x.start)} → ${fmtNum(x.end)}</td>
-      <td><span class="badge ${x.unit === 'KM' ? 'badge-green' : 'badge-blue'}">${fmtNum(x.net)} ${x.unit}</span></td>
+      <td>${openCloseCell}</td>
+      <td>${netRunCell}</td>
       <td>${x.operator}</td>
       <td>${photoCell}</td>
-      <td><input type="text" class="remark-inp" value="${safeRem}" placeholder="Remark..." oninput="saveMprEntryRemark('${x.id}', this.value)"></td>
+      <td><input type="text" class="remark-inp" value="${safeRem}" placeholder="Remark..." oninput="saveMprEntryRemark('${x.id}', this.value, ${isRunning})"></td>
       <td class="${isDpr ? 'no-print' : ''}">${actionCell}</td>
     </tr>
   `;
@@ -2958,7 +2953,7 @@ async function submitElectricity(e, prefix) {
   renderElectricity();
   updateGateHeroStats();
   if (adminScreen === "DPR") renderSyncDpr();
-  showToast(`⚡ Saved ${fmtNum(netUnits)} kWh (₹${fmtNum(totalBill)})!`);
+  showToast(`⚡ Cloud Saved! ${fmtNum(netUnits)} kWh (₹${fmtNum(totalBill)})`);
 }
 
 function renderElectricity() {
@@ -3198,7 +3193,9 @@ function buildDprPayload(dt) {
   const sum = (arr, fn) => arr.reduce((a, b) => a + (parseFloat(fn(b)) || 0), 0);
   const normDt = normalizeDateYMD(dt);
   const dList = state.diesel.filter(x => normalizeDateYMD(x.date) === normDt);
-  const pList = state.progress.filter(x => normalizeDateYMD(x.date) === normDt);
+  const pCompleted = state.progress.filter(x => normalizeDateYMD(x.date) === normDt);
+  const pOpen = state.openShifts.filter(x => normalizeDateYMD(x.date) === normDt).map(s => ({ ...s, _isOpenShift: true }));
+  const pList = [...pOpen, ...pCompleted];
   const iList = state.inward.filter(x => normalizeDateYMD(x.date) === normDt);
   const eList = state.electricity.filter(x => normalizeDateYMD(x.date) === normDt);
 
@@ -3218,9 +3215,9 @@ function buildDprPayload(dt) {
     return { id: t.id, name: t.name, allIn, allOut, closing, cap };
   });
 
-  const totalHrs = sum(pList.filter(x => x.unit === "Hrs"), x => x.net);
-  const totalClockHrs = sum(pList.filter(x => x.unit === "Hrs"), x => x.timeHrs);
-  const totalKm = sum(pList.filter(x => x.unit === "KM"), x => x.net);
+  const totalHrs = sum(pCompleted.filter(x => x.unit === "Hrs"), x => x.net);
+  const totalClockHrs = sum(pCompleted.filter(x => x.unit === "Hrs"), x => x.timeHrs);
+  const totalKm = sum(pCompleted.filter(x => x.unit === "KM"), x => x.net);
   const elecUnits = sum(eList, x => x.netUnits);
   const elecBill = sum(eList, x => x.totalBill);
 
@@ -3242,7 +3239,11 @@ function buildDprPayload(dt) {
   waMsg += `\n*🚜 2. MPR OUTPUT (${normDt}):* Machines *${fmtNum(totalHrs)} Hrs* | Dumpers *${fmtNum(totalKm)} KM*\n`;
   if (pList.length) {
     pList.forEach(p => {
-      waMsg += `• *${p.vehicleNum}* (${p.operator}): ${fmtNum(p.start)}→${fmtNum(p.end)} = *${fmtNum(p.net)} ${p.unit}*${p.remark ? " (" + p.remark + ")" : ""}\n`;
+      if (p._isOpenShift) {
+        waMsg += `• *${p.vehicleNum}* (${p.operator}): Open ${fmtNum(p.start)} → *Running*\n`;
+      } else {
+        waMsg += `• *${p.vehicleNum}* (${p.operator}): ${fmtNum(p.start)}→${fmtNum(p.end)} = *${fmtNum(p.net)} ${p.unit}*${p.remark ? " (" + p.remark + ")" : ""}\n`;
+      }
     });
   }
 
@@ -3568,14 +3569,6 @@ function getOpenShiftForVehicle(vehicleId) {
   return state.openShifts.find(s => entryBelongsToVehicle(s, fv, vehicleId)) || null;
 }
 
-function selectOpenShiftVehicle(vehicleId) {
-  const sel = document.getElementById("prVehicle");
-  if (sel && Array.from(sel.options).some(o => o.value === vehicleId)) {
-    sel.value = vehicleId;
-  }
-  onVehicleChanged();
-}
-
 function onVehicleChanged() {
   const diVehId = document.getElementById("diVehicle").value;
   const v1 = getVehicleById(diVehId);
@@ -3597,23 +3590,6 @@ function onVehicleChanged() {
   document.getElementById("prUnitBadge").textContent = v2 ? `${v2.category} • ${u2}` : "Auto Unit";
   document.getElementById("prStartLabel").textContent = isKm ? "शुरुआती KM (Opening Odometer)" : "शुरुआती रीडिंग (Opening HMR)";
   document.getElementById("prEndLabel").textContent = isKm ? "अंतिम KM (Closing Odometer)" : "अंतिम रीडिंग (Closing HMR)";
-
-  const openBox = document.getElementById("openShiftsContainer");
-  const openListEl = document.getElementById("openShiftsList");
-  if (state.openShifts.length > 0) {
-    openBox.classList.remove("hidden");
-    openListEl.innerHTML = state.openShifts.map(s => `
-      <div class="open-shift-item">
-        <div style="font-size:12px;">
-          <strong>🚜 ${s.vehicleNum}</strong> (${s.date})<br>
-          <span style="color:#92400e;">Opening: <strong>${fmtNum(s.start)} ${s.unit}</strong> @ ${s.openTime}</span>
-        </div>
-        <button type="button" class="btn btn-sm btn-green" onclick="selectOpenShiftVehicle('${s.vehicleId}')">⏹️ Enter Closing</button>
-      </div>
-    `).join("");
-  } else {
-    openBox.classList.add("hidden");
-  }
 
   const openSession = getOpenShiftForVehicle(prVehId);
   const openStepBox = document.getElementById("prOpeningStepBox");
@@ -3710,13 +3686,13 @@ async function submitDieselIssue(e) {
   };
   state.diesel.unshift(entry);
   saveAllLocal();
-  await pushRecordAtomic("diesel", entry);
+  const ok = await pushRecordAtomic("diesel", entry);
   document.getElementById("diLiters").value = "";
   document.getElementById("diRemarks").value = "";
   document.getElementById("diPhoto").value = "";
   onVehicleChanged();
   renderOperatorAvgAndRemarks();
-  showToast(`✅ Diesel ${fmtNum(litersVal)} L Saved & Synced!`);
+  showToast(ok ? `✅ Cloud Saved! ${fmtNum(litersVal)} L Admin Dashboard par bhej diya gaya` : "⚠️ Saved Locally (Check Internet)");
 }
 
 async function submitTankerInward(e) {
@@ -3732,11 +3708,11 @@ async function submitTankerInward(e) {
   };
   state.inward.unshift(entry);
   saveAllLocal();
-  await pushRecordAtomic("inward", entry);
+  const ok = await pushRecordAtomic("inward", entry);
   document.getElementById("tiLiters").value = "";
   document.getElementById("tiBill").value = "";
   document.getElementById("tiPhoto").value = "";
-  showToast("✅ Tanker Stock Inward Synced!");
+  showToast(ok ? "✅ Cloud Saved! Tanker Stock Admin Dashboard par update ho gaya" : "⚠️ Saved Locally (Check Internet)");
 }
 
 async function submitProgressStep(e) {
@@ -3808,7 +3784,7 @@ async function submitProgressStep(e) {
     state.progress.unshift(completedEntry);
     state.openShifts = state.openShifts.filter(s => s.id !== openSession.id);
     saveAllLocal();
-    await pushRecordAtomic("progress", completedEntry);
+    const ok = await pushRecordAtomic("progress", completedEntry);
     await deleteRecordAtomic("openShifts", openSession.id);
 
     document.getElementById("prEnd").value = "";
@@ -3816,7 +3792,7 @@ async function submitProgressStep(e) {
     document.getElementById("prPhoto").value = "";
     onVehicleChanged();
     renderOperatorAvgAndRemarks();
-    showToast(`⏹️ Closing Saved! Net Run: ${fmtNum(completedEntry.net)} ${getUnit(v.category)}`);
+    showToast(ok ? `✅ Cloud Saved! Net Run: ${fmtNum(completedEntry.net)} ${getUnit(v.category)} Admin Dashboard par bhej diya gaya` : "⚠️ Saved Locally (Check Internet)");
   }
 }
 
@@ -4226,7 +4202,7 @@ async function fulfillRequest(reqId, tankerKey) {
   const tkObj = getTankerById(tankerKey);
   req.status = "Fulfilled (" + tkObj.name + ")";
   const v = getVehicleById(req.vehicleId);
-  state.diesel.unshift({
+  const newIssue = {
     id: "di_" + Date.now(),
     tanker: tankerKey,
     vehicleId: req.vehicleId,
@@ -4240,10 +4216,11 @@ async function fulfillRequest(reqId, tankerKey) {
     operator: req.operator,
     remarks: "Fulfilled Diesel Demand" + (req.note ? " - " + req.note : ""),
     photo: ""
-  });
+  };
+  state.diesel.unshift(newIssue);
   saveAllLocal();
-  await syncNodeToCloud("requests", state.requests);
-  await syncNodeToCloud("diesel", state.diesel);
+  await pushRecordAtomic("requests", req);
+  await pushRecordAtomic("diesel", newIssue);
   renderAdmin();
   if (adminScreen === "GRAPHS") renderGraphicalAnalytics();
   if (adminScreen === "DPR") renderSyncDpr();
@@ -4255,7 +4232,7 @@ async function dismissRequest(reqId) {
   if (!req) return;
   req.status = "Dismissed";
   saveAllLocal();
-  await syncNodeToCloud("requests", state.requests);
+  await pushRecordAtomic("requests", req);
   renderAdmin();
 }
 
@@ -4382,6 +4359,10 @@ function renderAdmin() {
   const fProgressAllVeh = state.progress.filter(x => matchesDashDateRange(x.date));
   const fProgress = selectedVehId === "ALL" ? fProgressAllVeh : fProgressAllVeh.filter(x => entryBelongsToVehicle(x, selectedFv, selectedVehId));
 
+  const fOpenAllVeh = state.openShifts.filter(x => matchesDashDateRange(x.date));
+  const fOpenShifts = (selectedVehId === "ALL" ? fOpenAllVeh : fOpenAllVeh.filter(x => entryBelongsToVehicle(x, selectedFv, selectedVehId)))
+    .map(s => ({ ...s, _isOpenShift: true }));
+
   const vehMap = new Map();
   if (selectedVehId === "ALL") {
     state.fleet.forEach(v => vehMap.set(v.id, { fv: v, vid: v.id, vNum: v.number, cat: v.category }));
@@ -4425,12 +4406,12 @@ function renderAdmin() {
   document.getElementById("kpiMachineClockSub").textContent = `Auto Clock: ${fmtNum(machineClockHrs)} Hrs`;
   document.getElementById("kpiDumperKm").textContent = `${fmtNum(dumperKm)} KM`;
 
-  const sortedProg = [...fProgress].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
+  const combinedMpr = [...fOpenShifts, ...fProgress].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
   const pBody = document.getElementById("progressTableBody");
-  if (!sortedProg.length) {
+  if (!combinedMpr.length) {
     pBody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--muted);">No Machine Progress readings for ${dateLbl}.</td></tr>`;
   } else {
-    pBody.innerHTML = sortedProg.map(x => renderMprRowHtml(x, false)).join("");
+    pBody.innerHTML = combinedMpr.map(x => renderMprRowHtml(x, false)).join("");
   }
 
   const qSearch = (document.getElementById("searchDieselLedger").value || "").toLowerCase();
@@ -4511,7 +4492,7 @@ window.addEventListener("DOMContentLoaded", () => {
   checkHashRoute();
   fetchCloudState(true);
   startRealtimeCloudStream();
-  setInterval(() => fetchCloudState(false), 3000);
+  setInterval(() => fetchCloudState(false), 2000);
 });
 </script>
 </body>
