@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v60)</title>
+<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v61)</title>
 <style>
   :root {
     --bg: #f1f5f9;
@@ -516,7 +516,7 @@
       ⚠️ Admin has not enabled any entry tabs for your login yet. Please contact Admin.
     </div>
 
-    <!-- TAB 0: DIESEL ISSUE (MANUAL METER READING) -->
+    <!-- TAB 0: DIESEL ISSUE (SIMPLE READING INPUT) -->
     <form id="opTab0" class="card hidden" onsubmit="submitDieselIssue(event)">
       <h3 style="font-size:15px;margin-bottom:12px;">⛽ डीजल इशू एंट्री (Diesel Issue)</h3>
       <div class="form-group">
@@ -537,8 +537,8 @@
           <input type="number" step="any" inputmode="decimal" id="diLiters" placeholder="e.g. 98.5" required>
         </div>
         <div class="form-group">
-          <label id="diMeterLabel">वर्तमान मीटर रीडिंग (HMR / KM)</label>
-          <input type="number" step="any" inputmode="decimal" id="diMeter" placeholder="Enter current reading" required>
+          <label id="diMeterLabel">मीटर रीडिंग (HMR / KM)</label>
+          <input type="number" step="any" inputmode="decimal" id="diMeter" placeholder="Enter reading" required>
         </div>
       </div>
       <div class="form-group">
@@ -1997,22 +1997,6 @@ function computeDieselToDieselStats(fv, vid, startDt, endDt) {
   };
 }
 
-function getLatestDieselMeterForVehicle(vehicleId) {
-  if (!vehicleId) return null;
-  const fv = getVehicleById(vehicleId);
-  const vDiesel = state.diesel.filter(d => entryBelongsToVehicle(d, fv, vehicleId) && !isNaN(parseFloat(d.meter)) && parseFloat(d.meter) > 0);
-  if (!vDiesel.length) return null;
-  vDiesel.sort((a, b) =>
-    normalizeDateYMD(b.date).localeCompare(normalizeDateYMD(a.date)) ||
-    (parseFloat(b.meter) || 0) - (parseFloat(a.meter) || 0) ||
-    (b.id || "").localeCompare(a.id || "")
-  );
-  return {
-    value: parseFloat(vDiesel[0].meter),
-    date: vDiesel[0].date || ""
-  };
-}
-
 function getLatestClosingForVehicle(vehicleId) {
   if (!vehicleId) return null;
   const fv = getVehicleById(vehicleId);
@@ -2604,7 +2588,6 @@ function renderMprRowHtml(x, isDpr) {
 
   const safeRem = String(x.remark || "").replace(/"/g, "&quot;");
 
-  // Separate Opening Photo & Closing Photo buttons
   const openPhotoSrc = x.openPhoto || x.photo || "";
   const closePhotoSrc = x.closePhoto || "";
   const photoBtns = [];
@@ -3585,14 +3568,10 @@ function onVehicleChanged() {
   const diVehId = document.getElementById("diVehicle").value;
   const v1 = getVehicleById(diVehId);
   const u1 = v1 ? getUnit(v1.category) : "HMR / KM";
-  const lastDi = v1 ? getLatestDieselMeterForVehicle(v1.id) : null;
   const diMeterInp = document.getElementById("diMeter");
   diMeterInp.value = "";
-  if (lastDi) {
-    document.getElementById("diMeterLabel").textContent = `वर्तमान मीटर रीडिंग (${u1}) [पिछला: ${fmtNum(lastDi.value)} • ${lastDi.date}]`;
-  } else {
-    document.getElementById("diMeterLabel").textContent = `वर्तमान मीटर रीडिंग (${u1})`;
-  }
+  diMeterInp.placeholder = "Enter reading";
+  document.getElementById("diMeterLabel").textContent = `मीटर रीडिंग (${u1})`;
 
   const prVehId = document.getElementById("prVehicle").value;
   const v2 = getVehicleById(prVehId);
@@ -3636,8 +3615,7 @@ function onReqVehicleChanged() {
   const v = getVehicleById(document.getElementById("rqVehicle").value);
   const rqMeterInp = document.getElementById("rqMeter");
   if (v && !rqMeterInp.value) {
-    const last = getLatestClosingForVehicle(v.id);
-    if (last) rqMeterInp.placeholder = `Last: ${fmtNum(last.value)} ${getUnit(v.category)}`;
+    rqMeterInp.placeholder = `Enter ${getUnit(v.category)} reading`;
   }
 }
 
@@ -4402,7 +4380,6 @@ function renderAdmin() {
   const fProgressAllVeh = state.progress.filter(x => matchesDashDateRange(x.date));
   const fProgress = selectedVehId === "ALL" ? fProgressAllVeh : fProgressAllVeh.filter(x => entryBelongsToVehicle(x, selectedFv, selectedVehId));
 
-  // Always show active Open Shifts (Closing Pending) in MPR Table so admin never misses running shifts
   const fOpenAllVeh = state.openShifts.filter(x => !x.date || matchesDashDateRange(x.date) || dashPreset === "TODAY");
   const fOpenShifts = (selectedVehId === "ALL" ? fOpenAllVeh : fOpenAllVeh.filter(x => entryBelongsToVehicle(x, selectedFv, selectedVehId)))
     .map(s => ({ ...s, _isOpenShift: true }));
