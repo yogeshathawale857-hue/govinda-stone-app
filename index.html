@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v62)</title>
+<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v72)</title>
 <style>
   :root {
     --bg: #f1f5f9;
@@ -516,7 +516,7 @@
       ⚠️ Admin has not enabled any entry tabs for your login yet. Please contact Admin.
     </div>
 
-    <!-- TAB 0: DIESEL ISSUE (SIMPLE METER READING ONLY — NO AUTOMATIC PREVIOUS TEXT) -->
+    <!-- TAB 0: DIESEL ISSUE (100% STATIC UNTOUCHED INPUTS) -->
     <form id="opTab0" class="card hidden" onsubmit="submitDieselIssue(event)">
       <h3 style="font-size:15px;margin-bottom:12px;">⛽ डीजल इशू एंट्री (Diesel Issue)</h3>
       <div class="form-group">
@@ -525,7 +525,7 @@
       </div>
       <div class="form-group">
         <label>गाड़ी / मशीन चुनें (Select Vehicle / Machine)</label>
-        <select id="diVehicle" required onchange="onVehicleChanged()"></select>
+        <select id="diVehicle" required onchange="updateDieselUnitLabelOnly()"></select>
       </div>
       <div class="form-group">
         <label>तारीख (Date)</label>
@@ -534,11 +534,11 @@
       <div class="grid-2">
         <div class="form-group">
           <label>डीजल मात्रा (Liters)</label>
-          <input type="number" step="any" inputmode="decimal" id="diLiters" placeholder="e.g. 98.5" required>
+          <input type="text" inputmode="decimal" id="diLiters" placeholder="e.g. 100" autocomplete="off" required>
         </div>
         <div class="form-group">
           <label id="diMeterLabel">मीटर रीडिंग (Hrs / KM)</label>
-          <input type="number" step="any" inputmode="decimal" id="diMeter" placeholder="Enter reading" required>
+          <input type="text" inputmode="decimal" id="diMeter" placeholder="Enter reading" autocomplete="off" required>
         </div>
       </div>
       <div class="form-group">
@@ -557,7 +557,7 @@
       <button type="submit" class="btn btn-primary btn-block">✅ डीजल एंट्री सेव करें (Submit)</button>
     </form>
 
-    <!-- TAB 1: TANKER STOCK INWARD (WITH PHOTO) -->
+    <!-- TAB 1: TANKER STOCK INWARD -->
     <form id="opTab1" class="card hidden" onsubmit="submitTankerInward(event)">
       <h3 style="font-size:15px;margin-bottom:12px;">🚛 टैंकर में नया डीजल स्टॉक (Tanker Inward)</h3>
       <div class="form-group">
@@ -590,7 +590,7 @@
       <button type="submit" class="btn btn-blue btn-block">✅ टैंकर स्टॉक सेव करें (Submit)</button>
     </form>
 
-    <!-- TAB 2: MACHINE / DUMPER PROGRESS (2-STEP: SAVE OPENING FIRST, THEN SAVE CLOSING FOR SAME VEHICLE) -->
+    <!-- TAB 2: MACHINE / DUMPER PROGRESS -->
     <form id="opTab2" class="card hidden" onsubmit="submitProgressStep(event)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
         <h3 style="font-size:15px;">🚜 मशीन / डम्पर रीडिंग (KM / HMR)</h3>
@@ -605,7 +605,7 @@
 
       <div class="form-group" id="prVehicleSelectGroup">
         <label>गाड़ी / मशीन चुनें (Allotted Vehicle / Machine)</label>
-        <select id="prVehicle" required onchange="onVehicleChanged()"></select>
+        <select id="prVehicle" required onchange="onProgressVehicleChanged(true)"></select>
       </div>
 
       <div class="form-group">
@@ -613,7 +613,6 @@
         <input type="date" id="prDate" required>
       </div>
 
-      <!-- STEP 1: OPENING READING INPUT -->
       <div id="prOpeningStepBox">
         <div class="form-group">
           <label id="prStartLabel">शुरुआती रीडिंग (Opening Reading)</label>
@@ -621,7 +620,6 @@
         </div>
       </div>
 
-      <!-- STEP 2: CLOSING READING INPUT -->
       <div id="prClosingStepBox" class="hidden">
         <div style="background:#eff6ff;border:1.5px solid #3b82f6;border-radius:10px;padding:10px 12px;margin-bottom:12px;">
           <div style="font-size:11px;font-weight:800;color:#1d4ed8;">✅ OPENING READING SAVED</div>
@@ -700,7 +698,7 @@
       </div>
     </div>
 
-    <!-- TAB 4: ELECTRICITY METER ENTRY (OPERATOR) -->
+    <!-- TAB 4: ELECTRICITY METER ENTRY -->
     <form id="opTab4" class="card hidden" onsubmit="submitElectricity(event, 'op')">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
         <h3 style="font-size:15px;">⚡ बिजली मीटर रीडिंग (Electricity Entry)</h3>
@@ -913,7 +911,7 @@
         </div>
       </div>
 
-      <!-- 3. MACHINE PROGRESS REPORT (MPR) — EXACT ORIGINAL FORMAT -->
+      <!-- 3. MACHINE PROGRESS REPORT (MPR) -->
       <div class="sec-banner green">
         <h2>🚜 Machine Progress Report (MPR)</h2>
         <span class="badge badge-green" id="mprDateBadge">Today</span>
@@ -1623,6 +1621,7 @@ let state = {
 let currentRole = null;
 let lockedOperatorName = "";
 let activeOperatorConfig = null;
+let operatorInitialized = false;
 let adminScreen = "DASH";
 let dashPreset = "TODAY";
 let avgStatusFilter = "ALL";
@@ -1632,6 +1631,7 @@ let firstLoadDone = false;
 let isWritingCloud = false;
 let lastWriteTs = 0;
 let liveEventSource = null;
+let lastRenderedSnapshotHash = "";
 
 function fmtNum(val, maxDec = 2) {
   const n = parseFloat(val);
@@ -2027,7 +2027,7 @@ function getLatestClosingForVehicle(vehicleId) {
 }
 
 // =========================================================================
-// ATOMIC REALTIME CLOUD WRITE & INSTANT SSE LIVE STREAM (NO OVERWRITE)
+// ATOMIC REALTIME CLOUD WRITE & FLICKER-FREE STREAM
 // =========================================================================
 function normalizeNodeArray(v) {
   if (!v) return [];
@@ -2138,9 +2138,12 @@ async function pushLocalToCloud() {
 
 function setSyncBadge(online) {
   const el = document.getElementById("syncStatus");
+  if (!el) return;
   if (online) {
-    el.className = "sync-badge live";
-    el.textContent = "🟢 Live Realtime";
+    if (!el.classList.contains("live")) {
+      el.className = "sync-badge live";
+      el.textContent = "🟢 Live Realtime";
+    }
   } else {
     el.className = "sync-badge";
     el.textContent = "🟡 Reconnecting...";
@@ -2164,6 +2167,28 @@ function playAlertBeep() {
   } catch (e) {}
 }
 
+function computeStateFingerprint() {
+  return JSON.stringify({
+    f: state.fleet.map(x => [x.id, x.number, x.category, x.stdAvg]),
+    d: state.diesel.map(x => [x.id, x.date, x.vehicleId, x.liters, x.meter, x.tanker]),
+    i: state.inward.map(x => [x.id, x.date, x.tanker, x.liters]),
+    p: state.progress.map(x => [x.id, x.date, x.vehicleId, x.start, x.end, x.net, x.remark]),
+    o: state.openShifts.map(x => [x.id, x.date, x.vehicleId, x.start, x.remark]),
+    e: state.electricity.map(x => [x.id, x.date, x.netUnits, x.totalBill]),
+    t: state.tankers,
+    op: state.operators.map(x => [x.id, x.name, x.perms, x.vehicles]),
+    r: state.requests.map(x => [x.id, x.status, x.liters]),
+    pin: state.adminPin
+  });
+}
+
+function isUserActivelyTyping() {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 function applyCloudSnapshot(cloud) {
   if (!cloud) return;
 
@@ -2182,7 +2207,7 @@ function applyCloudSnapshot(cloud) {
   const cOperators = normalizeNodeArray(cloud.operators);
   const cRequests = normalizeNodeArray(cloud.requests);
 
-  const recentlyWrote = (Date.now() - lastWriteTs) < 3000;
+  const recentlyWrote = (Date.now() - lastWriteTs) < 3500;
   state.fleet = recentlyWrote ? mergeById(cFleet, state.fleet) : cFleet;
   state.diesel = recentlyWrote ? mergeById(cDiesel, state.diesel) : cDiesel;
   state.inward = recentlyWrote ? mergeById(cInward, state.inward) : cInward;
@@ -2197,6 +2222,12 @@ function applyCloudSnapshot(cloud) {
   if (cloud.mprRemarks && typeof cloud.mprRemarks === "object") {
     state.mprRemarks = recentlyWrote ? { ...cloud.mprRemarks, ...state.mprRemarks } : cloud.mprRemarks;
   }
+
+  const newHash = computeStateFingerprint();
+  if (firstLoadDone && newHash === lastRenderedSnapshotHash) {
+    return;
+  }
+  lastRenderedSnapshotHash = newHash;
 
   const pending = state.requests.filter(r => r.status === "Pending");
   if (firstLoadDone && currentRole === "admin") {
@@ -2222,7 +2253,12 @@ function applyCloudSnapshot(cloud) {
 
   saveAllLocal();
   updateGateHeroStats();
-  refreshActiveUI();
+  if (currentRole === "operator") {
+    populateOperatorDropdownsSafe();
+    renderOperatorRequests();
+  } else if (currentRole === "admin" && !isUserActivelyTyping()) {
+    refreshActiveUI();
+  }
 }
 
 function startRealtimeCloudStream() {
@@ -2257,7 +2293,7 @@ function startRealtimeCloudStream() {
 }
 
 async function fetchCloudState(force = false) {
-  if (!force && (isWritingCloud || (Date.now() - lastWriteTs < 2000))) return;
+  if (!force && (isWritingCloud || (Date.now() - lastWriteTs < 2500))) return;
   try {
     const reqStart = Date.now();
     const res = await fetch(`${DB_URL}/gsi_live.json?t=${reqStart}`, { cache: "no-store" });
@@ -2283,16 +2319,13 @@ async function fetchCloudState(force = false) {
 }
 
 function refreshActiveUI() {
-  if (currentRole === "operator") {
-    applyOperatorPermissionsAndAllotment();
-    renderOperatorRequests();
-    renderOperatorAvgAndRemarks();
-  }
   if (currentRole === "admin") {
-    renderAdmin();
-    renderElectricity();
-    if (adminScreen === "GRAPHS") renderGraphicalAnalytics();
-    if (adminScreen === "DPR") renderSyncDpr();
+    if (!isUserActivelyTyping()) {
+      renderAdmin();
+      renderElectricity();
+      if (adminScreen === "GRAPHS") renderGraphicalAnalytics();
+      if (adminScreen === "DPR") renderSyncDpr();
+    }
     updateClearCounts();
   }
 }
@@ -3340,6 +3373,9 @@ function checkHashRoute() {
   if (hash.startsWith("#operator")) {
     const parts = hash.split("=");
     const opName = parts.length > 1 ? parts[1].trim() : "";
+    if (currentRole === "operator" && operatorInitialized && lockedOperatorName === opName) {
+      return;
+    }
     enterOperatorMode(opName, true);
   }
 }
@@ -3350,6 +3386,7 @@ function verifyAdminPin() {
   if (!entered) return showToast("⚠️ Enter Admin PIN");
   if (entered === currentPin) {
     currentRole = "admin";
+    operatorInitialized = false;
     document.body.classList.remove("portal-active");
     document.getElementById("pinInput").value = "";
     document.getElementById("roleGate").classList.add("hidden");
@@ -3415,6 +3452,7 @@ function getEffectiveOpPermissions() {
 function enterOperatorMode(opName, isLockedLink = false) {
   currentRole = "operator";
   lockedOperatorName = opName || "";
+  operatorInitialized = true;
   document.body.classList.remove("portal-active");
   document.getElementById("roleGate").classList.add("hidden");
   document.getElementById("appHeader").classList.remove("hidden");
@@ -3448,12 +3486,12 @@ function enterOperatorMode(opName, isLockedLink = false) {
   });
 
   prefillLastElectricityOpen("op");
-  applyOperatorPermissionsAndAllotment();
+  populateOperatorDropdownsSafe(true);
   renderOperatorRequests();
   renderOperatorAvgAndRemarks();
 }
 
-function applyOperatorPermissionsAndAllotment() {
+function populateOperatorDropdownsSafe(initialSetup = false) {
   const cfg = getEffectiveOpPermissions();
   activeOperatorConfig = cfg;
 
@@ -3472,7 +3510,7 @@ function applyOperatorPermissionsAndAllotment() {
   } else {
     noPerm.classList.add("hidden");
     const activeVisible = [0, 1, 2, 3, 4, 5].some(i => permFlags[i] && !document.getElementById("opTab" + i).classList.contains("hidden"));
-    if (!activeVisible) switchOpTab(firstAllowedIdx);
+    if (initialSetup || !activeVisible) switchOpTab(firstAllowedIdx);
   }
 
   const allottedFleet = (cfg.vehicles && cfg.vehicles.length)
@@ -3490,8 +3528,10 @@ function applyOperatorPermissionsAndAllotment() {
   ["diTanker", "tiTanker"].forEach(id => {
     const el = document.getElementById(id);
     const prev = el.value;
-    el.innerHTML = tankerOpts;
-    if (prev && state.tankers.some(t => t.id === prev)) el.value = prev;
+    if (el.innerHTML !== tankerOpts) {
+      el.innerHTML = tankerOpts;
+      if (prev && state.tankers.some(t => t.id === prev)) el.value = prev;
+    }
   });
 
   const diOpts = state.fleet.length
@@ -3499,8 +3539,10 @@ function applyOperatorPermissionsAndAllotment() {
     : `<option value="">-- No Vehicles --</option>`;
   const diEl = document.getElementById("diVehicle");
   const prevDi = diEl.value;
-  diEl.innerHTML = diOpts;
-  if (prevDi && state.fleet.some(v => v.id === prevDi)) diEl.value = prevDi;
+  if (diEl.innerHTML !== diOpts) {
+    diEl.innerHTML = diOpts;
+    if (prevDi && state.fleet.some(v => v.id === prevDi)) diEl.value = prevDi;
+  }
 
   const allotOpts = allottedFleet.length
     ? allottedFleet.map(v => `<option value="${v.id}">${v.number} (${v.category} - ${v.owner})</option>`).join("")
@@ -3509,8 +3551,10 @@ function applyOperatorPermissionsAndAllotment() {
   ["prVehicle", "rqVehicle"].forEach(id => {
     const el = document.getElementById(id);
     const prev = el.value;
-    el.innerHTML = allotOpts;
-    if (prev && allottedFleet.some(v => v.id === prev)) el.value = prev;
+    if (el.innerHTML !== allotOpts) {
+      el.innerHTML = allotOpts;
+      if (prev && allottedFleet.some(v => v.id === prev)) el.value = prev;
+    }
   });
 
   const prCard = document.getElementById("prAllottedCard");
@@ -3526,7 +3570,8 @@ function applyOperatorPermissionsAndAllotment() {
     prSelGroup.classList.remove("hidden");
   }
 
-  onVehicleChanged();
+  updateDieselUnitLabelOnly();
+  if (initialSetup) onProgressVehicleChanged(true);
   onReqVehicleChanged();
 }
 
@@ -3534,6 +3579,7 @@ function logoutRole() {
   currentRole = null;
   lockedOperatorName = "";
   activeOperatorConfig = null;
+  operatorInitialized = false;
   closeAdminMenu();
   if (window.location.hash) history.replaceState(null, "", getBaseUrl());
   document.body.classList.add("portal-active");
@@ -3564,15 +3610,14 @@ function getOpenShiftForVehicle(vehicleId) {
   return state.openShifts.find(s => entryBelongsToVehicle(s, fv, vehicleId)) || null;
 }
 
-function onVehicleChanged() {
+function updateDieselUnitLabelOnly() {
   const diVehId = document.getElementById("diVehicle").value;
   const v1 = getVehicleById(diVehId);
   const u1 = v1 ? getUnit(v1.category) : "Hrs / KM";
-  const diMeterInp = document.getElementById("diMeter");
-  diMeterInp.value = "";
-  diMeterInp.placeholder = "Enter reading";
   document.getElementById("diMeterLabel").textContent = `मीटर रीडिंग (${u1})`;
+}
 
+function onProgressVehicleChanged(clearMeter = false) {
   const prVehId = document.getElementById("prVehicle").value;
   const v2 = getVehicleById(prVehId);
   const u2 = v2 ? getUnit(v2.category) : "HMR / KM";
@@ -3593,7 +3638,7 @@ function onVehicleChanged() {
     closeStepBox.classList.remove("hidden");
     document.getElementById("prSavedOpeningInfo").textContent =
       `${openSession.vehicleNum}: Opening ${fmtNum(openSession.start)} ${openSession.unit} (Saved @ ${openSession.openTime}, ${openSession.date})`;
-    if (openSession.date) document.getElementById("prDate").value = openSession.date;
+    if (clearMeter && openSession.date) document.getElementById("prDate").value = openSession.date;
     if (openSession.remark && !document.getElementById("prRemark").value) {
       document.getElementById("prRemark").value = openSession.remark;
     }
@@ -3662,6 +3707,9 @@ async function submitDieselIssue(e) {
   if (!v) return showToast("⚠️ Ask Admin to add vehicles first");
   const litersVal = parseFloat(document.getElementById("diLiters").value);
   const meterVal = parseFloat(document.getElementById("diMeter").value);
+  if (isNaN(litersVal) || litersVal <= 0) return showToast("⚠️ Enter valid Diesel Liters");
+  if (isNaN(meterVal) || meterVal < 0) return showToast("⚠️ Enter valid Meter Reading");
+
   const entry = {
     id: "di_" + Date.now(),
     tanker: document.getElementById("diTanker").value,
@@ -3681,11 +3729,11 @@ async function submitDieselIssue(e) {
   saveAllLocal();
   const ok = await pushRecordAtomic("diesel", entry);
   document.getElementById("diLiters").value = "";
+  document.getElementById("diMeter").value = "";
   document.getElementById("diRemarks").value = "";
   document.getElementById("diPhoto").value = "";
   const diFile = document.getElementById("diPhotoFile");
   if (diFile) diFile.value = "";
-  onVehicleChanged();
   renderOperatorAvgAndRemarks();
   showToast(ok ? `✅ Cloud Saved! ${fmtNum(litersVal)} L Admin Dashboard par bhej diya gaya` : "⚠️ Saved Locally (Check Internet)");
 }
@@ -3750,7 +3798,7 @@ async function submitProgressStep(e) {
     document.getElementById("prPhoto").value = "";
     const prFile = document.getElementById("prPhotoFile");
     if (prFile) prFile.value = "";
-    onVehicleChanged();
+    onProgressVehicleChanged(false);
     showToast(`▶️ Opening Reading (${fmtNum(startVal)} ${getUnit(v.category)}) Saved! Ab Closing daal kar save karein.`);
   } else {
     const endVal = parseFloat(document.getElementById("prEnd").value);
@@ -3796,7 +3844,7 @@ async function submitProgressStep(e) {
     document.getElementById("prPhoto").value = "";
     const prFile = document.getElementById("prPhotoFile");
     if (prFile) prFile.value = "";
-    onVehicleChanged();
+    onProgressVehicleChanged(false);
     renderOperatorAvgAndRemarks();
     showToast(ok ? `✅ Cloud Saved! Net Run: ${fmtNum(completedEntry.net)} ${getUnit(v.category)} Admin Dashboard par bhej diya gaya` : "⚠️ Saved Locally (Check Internet)");
   }
@@ -4289,9 +4337,12 @@ function renderAdmin() {
 
   const vfEl = document.getElementById("dashVehicleFilter");
   const prevVeh = vfEl.value || "ALL";
-  vfEl.innerHTML = `<option value="ALL">All Vehicles (${state.fleet.length})</option>` +
+  const vfOpts = `<option value="ALL">All Vehicles (${state.fleet.length})</option>` +
     state.fleet.map(v => `<option value="${v.id}">${v.number} (${v.category})</option>`).join("");
-  if (prevVeh === "ALL" || state.fleet.some(v => v.id === prevVeh)) vfEl.value = prevVeh;
+  if (vfEl.innerHTML !== vfOpts) {
+    vfEl.innerHTML = vfOpts;
+    if (prevVeh === "ALL" || state.fleet.some(v => v.id === prevVeh)) vfEl.value = prevVeh;
+  }
   const selectedVehId = vfEl.value || "ALL";
   const selectedFv = selectedVehId === "ALL" ? null : getVehicleById(selectedVehId);
 
@@ -4507,7 +4558,7 @@ function copyWhatsAppDPR() {
 
 window.addEventListener("hashchange", checkHashRoute);
 window.addEventListener("visibilitychange", () => {
-  if (!document.hidden) fetchCloudState(true);
+  if (!document.hidden && currentRole !== "operator") fetchCloudState(true);
 });
 window.addEventListener("DOMContentLoaded", () => {
   loadLocalState();
@@ -4516,7 +4567,9 @@ window.addEventListener("DOMContentLoaded", () => {
   checkHashRoute();
   fetchCloudState(true);
   startRealtimeCloudStream();
-  setInterval(() => fetchCloudState(false), 2000);
+  setInterval(() => {
+    if (currentRole !== "operator") fetchCloudState(false);
+  }, 4000);
 });
 </script>
 </body>
