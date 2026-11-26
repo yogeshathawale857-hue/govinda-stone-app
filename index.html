@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v61)</title>
+<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v62)</title>
 <style>
   :root {
     --bg: #f1f5f9;
@@ -516,7 +516,7 @@
       ⚠️ Admin has not enabled any entry tabs for your login yet. Please contact Admin.
     </div>
 
-    <!-- TAB 0: DIESEL ISSUE (SIMPLE READING INPUT) -->
+    <!-- TAB 0: DIESEL ISSUE (SIMPLE METER READING ONLY — NO AUTOMATIC PREVIOUS TEXT) -->
     <form id="opTab0" class="card hidden" onsubmit="submitDieselIssue(event)">
       <h3 style="font-size:15px;margin-bottom:12px;">⛽ डीजल इशू एंट्री (Diesel Issue)</h3>
       <div class="form-group">
@@ -537,7 +537,7 @@
           <input type="number" step="any" inputmode="decimal" id="diLiters" placeholder="e.g. 98.5" required>
         </div>
         <div class="form-group">
-          <label id="diMeterLabel">मीटर रीडिंग (HMR / KM)</label>
+          <label id="diMeterLabel">मीटर रीडिंग (Hrs / KM)</label>
           <input type="number" step="any" inputmode="decimal" id="diMeter" placeholder="Enter reading" required>
         </div>
       </div>
@@ -3567,7 +3567,7 @@ function getOpenShiftForVehicle(vehicleId) {
 function onVehicleChanged() {
   const diVehId = document.getElementById("diVehicle").value;
   const v1 = getVehicleById(diVehId);
-  const u1 = v1 ? getUnit(v1.category) : "HMR / KM";
+  const u1 = v1 ? getUnit(v1.category) : "Hrs / KM";
   const diMeterInp = document.getElementById("diMeter");
   diMeterInp.value = "";
   diMeterInp.placeholder = "Enter reading";
