@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v57)</title>
+<title>Govinda Stone Industries — Diesel, Fleet & Sync DPR (v58)</title>
 <style>
   :root {
     --bg: #f1f5f9;
@@ -213,7 +213,7 @@
   .bar-col { display: flex; flex-direction: column; align-items: center; width: 34px; }
   .bar-top-lbl { font-size: 9px; font-weight: 800; margin-bottom: 3px; white-space: nowrap; }
   .extra-pill { font-size: 8.5px; font-weight: 800; padding: 1px 5px; border-radius: 99px; margin-bottom: 3px; white-space: nowrap; }
-  .extra-pill.red { background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
+  .extra-pill.red { background: #fee2f2; color: #dc2626; border: 1px solid #fca5a5; }
   .extra-pill.green { background: #dcfce7; color: #16a34a; border: 1px solid #86efac; }
   .bar-rect { width: 24px; border-radius: 4px 4px 0 0; min-height: 2px; }
   .bar-rect.std-blue { background: #3b82f6; }
@@ -2587,6 +2587,7 @@ async function saveEditedDiesel(e) {
 // =========================================================================
 function renderMprRowHtml(x, isDpr) {
   const isRunning = !!x._isOpenShift;
+  const dispDate = normalizeDateYMD(x.date) || x.date || todayStr();
   const timeStr = isRunning
     ? `${x.openTime || "-"} → <span style="color:var(--amber);font-weight:700;">Running</span>`
     : ((x.openTime && x.closeTime)
@@ -2598,8 +2599,8 @@ function renderMprRowHtml(x, isDpr) {
     : `${fmtNum(x.start)} → ${fmtNum(x.end)}`;
 
   const netRunCell = isRunning
-    ? `<span class="badge badge-amber">Open (${x.unit})</span>`
-    : `<span class="badge ${x.unit === 'KM' ? 'badge-green' : 'badge-blue'}">${fmtNum(x.net)} ${x.unit}</span>`;
+    ? `<span class="badge badge-amber">Open (${x.unit || "KM"})</span>`
+    : `<span class="badge ${x.unit === 'KM' ? 'badge-green' : 'badge-blue'}">${fmtNum(x.net)} ${x.unit || "KM"}</span>`;
 
   const safeRem = String(x.remark || "").replace(/"/g, "&quot;");
   const photoCell = x.photo
@@ -2615,12 +2616,12 @@ function renderMprRowHtml(x, isDpr) {
 
   return `
     <tr>
-      <td><strong>${x.date || "-"}</strong></td>
-      <td><strong>${x.vehicleNum}</strong><br><span style="font-size:10px;color:var(--muted);">${x.category} (${x.unit})</span></td>
+      <td><strong>${dispDate}</strong></td>
+      <td><strong>${x.vehicleNum || "-"}</strong><br><span style="font-size:10px;color:var(--muted);">${x.category || "Vehicle"} (${x.unit || "KM"})</span></td>
       <td>${timeStr}</td>
       <td>${openCloseCell}</td>
       <td>${netRunCell}</td>
-      <td>${x.operator}</td>
+      <td>${x.operator || "-"}</td>
       <td>${photoCell}</td>
       <td><input type="text" class="remark-inp" value="${safeRem}" placeholder="Remark..." oninput="saveMprEntryRemark('${x.id}', this.value, ${isRunning})"></td>
       <td class="${isDpr ? 'no-print' : ''}">${actionCell}</td>
@@ -3194,7 +3195,7 @@ function buildDprPayload(dt) {
   const normDt = normalizeDateYMD(dt);
   const dList = state.diesel.filter(x => normalizeDateYMD(x.date) === normDt);
   const pCompleted = state.progress.filter(x => normalizeDateYMD(x.date) === normDt);
-  const pOpen = state.openShifts.filter(x => normalizeDateYMD(x.date) === normDt).map(s => ({ ...s, _isOpenShift: true }));
+  const pOpen = state.openShifts.filter(x => !x.date || normalizeDateYMD(x.date) === normDt).map(s => ({ ...s, _isOpenShift: true }));
   const pList = [...pOpen, ...pCompleted];
   const iList = state.inward.filter(x => normalizeDateYMD(x.date) === normDt);
   const eList = state.electricity.filter(x => normalizeDateYMD(x.date) === normDt);
@@ -4359,7 +4360,8 @@ function renderAdmin() {
   const fProgressAllVeh = state.progress.filter(x => matchesDashDateRange(x.date));
   const fProgress = selectedVehId === "ALL" ? fProgressAllVeh : fProgressAllVeh.filter(x => entryBelongsToVehicle(x, selectedFv, selectedVehId));
 
-  const fOpenAllVeh = state.openShifts.filter(x => matchesDashDateRange(x.date));
+  // Always show active Open Shifts (Closing Pending) in MPR Table so admin never misses running shifts
+  const fOpenAllVeh = state.openShifts.filter(x => !x.date || matchesDashDateRange(x.date) || dashPreset === "TODAY");
   const fOpenShifts = (selectedVehId === "ALL" ? fOpenAllVeh : fOpenAllVeh.filter(x => entryBelongsToVehicle(x, selectedFv, selectedVehId)))
     .map(s => ({ ...s, _isOpenShift: true }));
 
@@ -4406,7 +4408,10 @@ function renderAdmin() {
   document.getElementById("kpiMachineClockSub").textContent = `Auto Clock: ${fmtNum(machineClockHrs)} Hrs`;
   document.getElementById("kpiDumperKm").textContent = `${fmtNum(dumperKm)} KM`;
 
-  const combinedMpr = [...fOpenShifts, ...fProgress].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
+  const combinedMpr = [...fOpenShifts, ...fProgress].sort((a, b) =>
+    normalizeDateYMD(b.date).localeCompare(normalizeDateYMD(a.date)) ||
+    (b.id || "").localeCompare(a.id || "")
+  );
   const pBody = document.getElementById("progressTableBody");
   if (!combinedMpr.length) {
     pBody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--muted);">No Machine Progress readings for ${dateLbl}.</td></tr>`;
